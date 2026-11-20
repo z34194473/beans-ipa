@@ -883,6 +883,8 @@ struct AccountHubSheet: View {
     @State private var confirmNeteaseLogout = false
     @State private var confirmQQLogout = false
     @State private var confirmKugouLogout = false
+    @State private var conceptBusy = false
+    @State private var conceptMessage = ""
 
     private var isEnglish: Bool { languageRaw == AppLanguage.english.rawValue }
     private var displayPlatformSummary: String {
@@ -906,6 +908,7 @@ struct AccountHubSheet: View {
                         if platformPrefs.isEnabled(SearchProvider.netease) { neteaseCard }
                         if platformPrefs.isEnabled(SearchProvider.qq) { qqCard }
                         if platformPrefs.isEnabled(SearchProvider.kugou) { kugouCard }
+                        if platformPrefs.isEnabled(SearchProvider.kugou) { kugouConceptCard }
                         Text(isEnglish ? "Sign in to \(displayPlatformSummary) to sync playlists and improve playback availability" : "\(platformPrefs.summaryText) 登录后可同步歌单并提升可播成功率")
                             .font(BeansFont.appFont(11))
                             .foregroundStyle(Color.beansComment)
@@ -1093,7 +1096,7 @@ struct AccountHubSheet: View {
                             if kugouAuth.isLoggedIn {
                                 Text(kugouAuth.nickname.isEmpty ? NSLocalizedString("已登录", comment: "") : kugouAuth.nickname)
                             } else {
-                                Text(LocalizedStringKey("未登录 · App 扫码同步歌单"))
+                                Text(LocalizedStringKey("未登录 · 扫码登录（概念版同账号）"))
                             }
                         }
                         .font(BeansFont.appFont(12))
@@ -1120,6 +1123,83 @@ struct AccountHubSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassPressButtonStyle(scale: 0.97))
+    }
+
+    // MARK: - 酷狗概念版（每日 VIP）
+
+    private var conceptStatusText: String {
+        if conceptBusy { return "正在请求概念版接口…" }
+        if !conceptMessage.isEmpty { return conceptMessage }
+        if !kugouAuth.isLoggedIn {
+            return "未登录 · 登录后可每日领 1 天 VIP，并取概念版高音质直链"
+        }
+        let known = kugouAuth.dfid
+        let dfidText = (known.isEmpty || known == "-") ? "未注册" : String(known.prefix(6)) + "…"
+        return "已登录 · dfid \(dfidText)"
+    }
+
+    private var kugouConceptCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Image(systemName: "crown.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color.beansAmber)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("酷狗概念版 · 每日 VIP")
+                        .font(BeansFont.appFont(15, .semibold))
+                        .foregroundStyle(Color.beansLabel)
+                    Text(conceptStatusText)
+                        .font(BeansFont.appFont(11))
+                        .foregroundStyle(Color.beansComment)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                }
+                Spacer()
+            }
+            HStack(spacing: 10) {
+                GlassButton(
+                    title: kugouAuth.isLoggedIn ? "领今日 VIP" : "扫码登录",
+                    systemName: kugouAuth.isLoggedIn ? "gift.fill" : "qrcode",
+                    prominent: true
+                ) {
+                    BeansHaptics.tap()
+                    if kugouAuth.isLoggedIn {
+                        runConceptClaim()
+                    } else {
+                        showKugouLogin = true
+                    }
+                }
+                Spacer()
+            }
+        }
+        .padding(14)
+        .background {
+            BeansGlass(shape: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+    }
+
+    private func runConceptClaim() {
+        conceptBusy = true
+        conceptMessage = ""
+        Task {
+            let output = await KugouConceptReward.shared.autoRunDailyIfNeeded(force: true)
+            await MainActor.run {
+                conceptBusy = false
+                guard let claim = output["claim"] else {
+                    conceptMessage = "没拿到返回结果，去看日志"
+                    return
+                }
+                if claim.ok {
+                    conceptMessage = "今日 VIP 已领取（+1 天）"
+                } else if claim.already {
+                    conceptMessage = "今天已经领过了"
+                } else if claim.exhausted {
+                    conceptMessage = "今日奖励次数已用尽"
+                } else {
+                    conceptMessage = "领取失败 code=\(claim.code) \(claim.message)"
+                }
+            }
+        }
     }
 
 }
