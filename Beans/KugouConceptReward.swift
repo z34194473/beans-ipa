@@ -248,36 +248,81 @@ final class KugouConceptReward: ObservableObject {
             BeansLogger.shared.log("酷狗概念版 VIP 到期查询失败 code=\(result.code) \(result.message)", level: .debug)
             return
         }
-        guard let raw = Self.deepValue(result.raw, keys: [
-            "vip_end_time", "vip_expire_time", "vip_endtime",
-            "end_time", "endtime", "expire_time", "expire_at", "deadline",
-        ]) else {
-            BeansLogger.shared.log("酷狗概念版 VIP 到期：响应里没有时间字段 \(Self.flatten(result.raw).prefix(120))", level: .debug)
+        // 结构固定是 data.busi_vip[]，每项一类联合 VIP（概念版 / 豪华版…），各带 vip_end_time。
+        // 优先挑概念版那一条；没有类型标记时再退回全部取最晚，避免命中别的产品或活动残留的旧日期。
+        let entries = Self.vipExpiryEntries(result.raw)
+        let conceptOnly = entries.filter { $0.isConcept }
+        let pool = conceptOnly.isEmpty ? entries : conceptOnly
+        guard let latest = pool.max(by: { $0.date < $1.date }) else {
+            BeansLogger.shared.log("酷狗概念版 VIP 到期：data.busi_vip 里没有可用时间 \(Self.flatten(result.raw).prefix(160))", level: .debug)
             return
         }
-        let text = Self.formatExpiry(String(describing: raw))
-        guard !text.isEmpty else { return }
+        BeansLogger.shared.log("酷狗概念版 VIP 到期：命中 \(entries.count) 条（概念版 \(conceptOnly.count) 条），取 \(latest.text)（原值 \(latest.raw)）", level: .debug)
         await MainActor.run {
-            vipExpiryText = text
-            UserDefaults.standard.set(text, forKey: KugouConceptReward.vipExpiryKey)
+            vipExpiryText = latest.text
+            UserDefaults.standard.set(latest.text, forKey: KugouConceptReward.vipExpiryKey)
+            UserDefaults.standard.set(latest.raw, forKey: KugouConceptReward.vipExpiryKey + ".raw")
         }
     }
 
-    /// 服务端可能给 Unix 秒 / 毫秒时间戳，也可能直接给 "2026-11-30 23:59:59"。
-    static func formatExpiry(_ raw: String) -> String {
+    /// 把 `data.busi_vip` 里每一条的到期时间都抽出来，交给调用方挑最晚的。
+    /// `isConcept` 表示这条记录自己能证明是概念版（`product_type`/`vip_type`/`busi_type`/`type` 里带 concept 或 3116）。
+    static func vipExpiryEntries(_ json: [String: Any]) -> [(date: Date, text: String, raw: String, isConcept: Bool)] {
+        var items: [[String: Any]] = []
+        if let data = json["data"] as? [String: Any] {
+            if let list = data["busi_vip"] as? [[String: Any]] { items += list }
+            if let single = data["busi_vip"] as? [String: Any] { items.append(single) }
+        }
+        if let list = json["busi_vip"] as? [[String: Any]] { items += list }
+
+        var entries: [(date: Date, text: String, raw: String, isConcept: Bool)] = []
+        for item in items {
+            let kind = ["product_type", "vip_type", "busi_type", "type"]
+                .compactMap { item[$0] }
+                .map { String(describing: $0).lowercased() }
+                .joined(separator: " ")
+            let isConcept = kind.contains("concept") || kind.contains("3116")
+            for key in ["vip_end_time", "end_time", "expire_time", "vip_expire_time"] {
+                guard let value = item[key], !(value is NSNull) else { continue }
+                let raw = String(describing: value)
+                if let parsed = parseExpiry(raw) {
+                    entries.append((parsed.date, parsed.text, raw, isConcept))
+                }
+            }
+        }
+        return entries
+    }
+
+    /// Unix 秒 / Unix 毫秒 / "2027-03-22 23:59:59" 都能吃，解析不了返回 nil。
+    static func parseExpiry(_ raw: String) -> (date: Date, text: String)? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed != "0", trimmed != "-1" else { return "" }
+        guard !trimmed.isEmpty, trimmed != "0", trimmed != "-1" else { return nil }
         if let numeric = Double(trimmed) {
             let seconds = numeric > 1_000_000_000_000 ? numeric / 1000 : numeric
-            guard seconds > 1_000_000_000 else { return "" }
-            let formatter = DateFormatter()
-            formatter.locale = Locale(identifier: "zh_CN")
-            formatter.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
-            formatter.dateFormat = "yyyy-MM-dd HH:mm"
-            return formatter.string(from: Date(timeIntervalSince1970: seconds))
+            guard seconds > 1_000_000_000 else { return nil }
+            let date = Date(timeIntervalSince1970: seconds)
+            return (date, displayFormatter.string(from: date))
         }
-        return trimmed
+        for pattern in ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm", "yyyy-MM-dd",
+                        "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd"] {
+            let parser = DateFormatter()
+            parser.locale = Locale(identifier: "en_US_POSIX")
+            parser.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+            parser.dateFormat = pattern
+            if let date = parser.date(from: trimmed) {
+                return (date, displayFormatter.string(from: date))
+            }
+        }
+        return nil
     }
+
+    private static let displayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        return formatter
+    }()
 
     // MARK: - 请求与签名
 
