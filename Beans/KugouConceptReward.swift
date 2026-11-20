@@ -57,9 +57,9 @@ final class KugouConceptReward {
     // MARK: - 对外入口
 
     /// App 进入前台 / 启动时调用：每日领取 + 升级 + 广告奖励（每天各一次上限）。
-    /// 失败只写日志，不影响播放。
+    /// 失败只写日志，不影响播放。`force = true` 时忽略本地「今天已跑过」标记（刚登录时用）。
     @discardableResult
-    func autoRunDailyIfNeeded() async -> [String: Result] {
+    func autoRunDailyIfNeeded(force: Bool = false) async -> [String: Result] {
         guard KugouMusicAuth.shared.isLoggedIn else {
             BeansLogger.shared.log("酷狗概念版奖励：未登录酷狗，跳过", level: .debug)
             return [:]
@@ -69,7 +69,7 @@ final class KugouConceptReward {
         defer { inFlightDaily = false }
 
         var output: [String: Result] = [:]
-        if !hasRunToday("claim") {
+        if force || !hasRunToday("claim") {
             let claim = await claimDailyVip()
             output["claim"] = claim
             if claim.ok || claim.already {
@@ -80,12 +80,12 @@ final class KugouConceptReward {
                 return output
             }
         }
-        if !hasRunToday("upgrade") {
+        if force || !hasRunToday("upgrade") {
             let upgrade = await upgradeVip()
             output["upgrade"] = upgrade
             if upgrade.ok || upgrade.already { markRunToday("upgrade") }
         }
-        if !hasRunToday("ad") {
+        if force || !hasRunToday("ad") {
             let ad = await reportAds(maxTimes: 8, intervalSeconds: 30)
             output["ad"] = ad
             if ad.ok || ad.already || ad.exhausted { markRunToday("ad") }
