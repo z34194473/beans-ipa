@@ -20,7 +20,7 @@ struct KugouLoginSheet: View {
                     .padding(.top, 12)
 
                 HStack {
-                    Text("登录酷狗音乐")
+                    Text("登录酷狗概念版")
                         .font(BeansFont.appFont(20, .bold))
                         .foregroundStyle(Color.beansLabel)
                     Spacer()
@@ -45,7 +45,7 @@ struct KugouLoginSheet: View {
 
                 statusView
 
-                Text("请使用酷狗音乐 App 扫码。登录成功后会保存移动端 token、设备 mid 和 dfid，用于同步云端歌单。")
+                Text("用酷狗音乐 App 扫码即可（概念版账号同样有效）。登录后会保存 token、设备 mid 与 dfid，用于概念版取链、每日领取 VIP 和播放上报。")
                     .font(BeansFont.appFont(11))
                     .foregroundStyle(Color.beansComment)
                     .multilineTextAlignment(.center)
@@ -164,6 +164,7 @@ struct KugouLoginSheet: View {
             timer = nil
             status = .success
             ToastCenter.shared.show("酷狗音乐已登录：\(name)")
+            Task { _ = await KugouConceptReward.shared.autoRunDailyIfNeeded(force: true) }
             dismiss()
         case .error(let message):
             status = .error(message)
