@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 /// 酷狗概念版每日 VIP 奖励（登录态操作，与取链通道无关）。
 ///
@@ -10,8 +11,16 @@ import Foundation
 ///
 /// 签名：`md5(signSecret + Σ排序k=v + body + signSecret)`，salt 是概念版 android 盐
 /// `LnT6xpN3khm36zse0QzvmgTZ3waWdRSA`（与 `KugouConceptAPI` 同一套）。
-final class KugouConceptReward {
+final class KugouConceptReward: ObservableObject {
     static let shared = KugouConceptReward()
+
+    /// 概念版 VIP 到期时间（缓存 + 登录后服务端刷新），卡片直接读它。
+    @Published private(set) var vipExpiryText: String = ""
+    private static let vipExpiryKey = "beans.kugou.reward.vipExpiry"
+
+    private init() {
+        vipExpiryText = UserDefaults.standard.string(forKey: KugouConceptReward.vipExpiryKey) ?? ""
+    }
 
     // MARK: - 常量
 
@@ -96,6 +105,8 @@ final class KugouConceptReward {
             output["ad"] = ad
             if ad.ok || ad.already || ad.exhausted { markRunToday("ad") }
         }
+        // 领完之后顺手刷新到期时间，卡片上的日期立刻跟着变
+        await refreshVipExpiry()
         return output
     }
 
@@ -209,9 +220,9 @@ final class KugouConceptReward {
         return last
     }
 
-    /// VIP 到期时间（概念版权益页）。参数不完整时返回 nil，不影响其它任务。
-    func unionVipExpiry() async -> String? {
-        let result = await request(
+    /// VIP 权益原始结果（概念版权益页）。
+    func unionVipExpiry() async -> Result {
+        await request(
             host: vipHost,
             path: "/v1/get_union_vip",
             method: "GET",
@@ -221,9 +232,51 @@ final class KugouConceptReward {
             ua: ua,
             task: "VIP状态"
         )
-        guard result.ok else { return nil }
-        let expiry = Self.deepValue(result.raw, keys: ["vip_end_time", "end_time", "expire_time"])
-        return expiry.map { String(describing: $0) }
+    }
+
+    /// 拉一次概念版 VIP 到期时间：命中就写缓存并推动 UI；失败保留上一次的值。
+    func refreshVipExpiry() async {
+        guard KugouMusicAuth.shared.isLoggedIn else {
+            await MainActor.run {
+                vipExpiryText = ""
+                UserDefaults.standard.removeObject(forKey: KugouConceptReward.vipExpiryKey)
+            }
+            return
+        }
+        let result = await unionVipExpiry()
+        guard result.ok else {
+            BeansLogger.shared.log("酷狗概念版 VIP 到期查询失败 code=\(result.code) \(result.message)", level: .debug)
+            return
+        }
+        guard let raw = Self.deepValue(result.raw, keys: [
+            "vip_end_time", "vip_expire_time", "vip_endtime",
+            "end_time", "endtime", "expire_time", "expire_at", "deadline",
+        ]) else {
+            BeansLogger.shared.log("酷狗概念版 VIP 到期：响应里没有时间字段 \(Self.flatten(result.raw).prefix(120))", level: .debug)
+            return
+        }
+        let text = Self.formatExpiry(String(describing: raw))
+        guard !text.isEmpty else { return }
+        await MainActor.run {
+            vipExpiryText = text
+            UserDefaults.standard.set(text, forKey: KugouConceptReward.vipExpiryKey)
+        }
+    }
+
+    /// 服务端可能给 Unix 秒 / 毫秒时间戳，也可能直接给 "2026-11-30 23:59:59"。
+    static func formatExpiry(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "0", trimmed != "-1" else { return "" }
+        if let numeric = Double(trimmed) {
+            let seconds = numeric > 1_000_000_000_000 ? numeric / 1000 : numeric
+            guard seconds > 1_000_000_000 else { return "" }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "zh_CN")
+            formatter.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+            formatter.dateFormat = "yyyy-MM-dd HH:mm"
+            return formatter.string(from: Date(timeIntervalSince1970: seconds))
+        }
+        return trimmed
     }
 
     // MARK: - 请求与签名
