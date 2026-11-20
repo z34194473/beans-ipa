@@ -1137,7 +1137,11 @@ final class PlayerManager: NSObject, ObservableObject {
                song.source == .kugou,
                let mixSongId = song.kugouAlbumAudioId,
                !mixSongId.isEmpty {
-                Task { _ = await KugouConceptReward.shared.reportListen(mixsongId: mixSongId) }
+                Task {
+                    _ = await KugouConceptReward.shared.reportListen(mixsongId: mixSongId)
+                    // 听完一首也算一次「活跃」，顺手补领当天未完成的概念版奖励（内部有 5 分钟节流 + 自然日去重）
+                    _ = await KugouConceptReward.shared.autoRunDailyIfNeeded()
+                }
             }
             if self.playMode == .repeatOne {
                 self.restartCurrent()
