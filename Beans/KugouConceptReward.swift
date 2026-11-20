@@ -53,6 +53,8 @@ final class KugouConceptReward {
 
     private let defaultsKeyPrefix = "beans.kugou.reward."
     private var inFlightDaily = false
+    /// 非强制调用的最小间隔，避免每首歌结束都打一遍接口。
+    private var lastAutoAttempt: Date?
 
     // MARK: - 对外入口
 
@@ -65,6 +67,10 @@ final class KugouConceptReward {
             return [:]
         }
         if inFlightDaily { return [:] }
+        if !force, let last = lastAutoAttempt, Date().timeIntervalSince(last) < 300 {
+            return [:]
+        }
+        lastAutoAttempt = Date()
         inFlightDaily = true
         defer { inFlightDaily = false }
 
