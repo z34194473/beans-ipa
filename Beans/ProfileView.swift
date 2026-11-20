@@ -885,6 +885,7 @@ struct AccountHubSheet: View {
     @State private var confirmKugouLogout = false
     @State private var conceptBusy = false
     @State private var conceptMessage = ""
+    @ObservedObject private var conceptReward = KugouConceptReward.shared
 
     private var isEnglish: Bool { languageRaw == AppLanguage.english.rawValue }
     private var displayPlatformSummary: String {
@@ -1135,7 +1136,9 @@ struct AccountHubSheet: View {
         }
         let known = kugouAuth.dfid
         let dfidText = (known.isEmpty || known == "-") ? "未注册" : String(known.prefix(6)) + "…"
-        return "已登录 · dfid \(dfidText)"
+        let expiry = conceptReward.vipExpiryText
+        let expiryText = expiry.isEmpty ? "未查到（下拉刷新）" : expiry
+        return "VIP 到期 \(expiryText) · dfid \(dfidText)"
     }
 
     private var kugouConceptCard: some View {
@@ -1175,6 +1178,11 @@ struct AccountHubSheet: View {
         .padding(14)
         .background {
             BeansGlass(shape: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .task {
+            if kugouAuth.isLoggedIn {
+                await KugouConceptReward.shared.refreshVipExpiry()
+            }
         }
     }
 
