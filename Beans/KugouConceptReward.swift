@@ -329,7 +329,12 @@ final class KugouConceptReward {
     }
 
     static func md5Hex(_ text: String) -> String {
-        Data(text.utf8).kgMD5Hex
+        let data = Data(text.utf8)
+        var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
+        data.withUnsafeBytes { buffer in
+            _ = CC_MD5(buffer.baseAddress, CC_LONG(data.count), &digest)
+        }
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     private static func intValue(_ value: Any?) -> Int? {
